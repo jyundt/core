@@ -8,7 +8,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -25,10 +25,26 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up Redfish temperature sensors."""
-    async_add_entities(
-        RedfishTemperatureSensor(entry.runtime_data, temperature_key)
-        for temperature_key in entry.runtime_data.data.temperatures
-    )
+    coordinator = entry.runtime_data
+    known_temperatures: set[tuple[str, str]] = set()
+
+    @callback
+    def async_add_new_sensors() -> None:
+        """Add sensors for newly usable temperature readings."""
+        new_temperatures = [
+            key
+            for key in coordinator.data.temperatures
+            if key not in known_temperatures
+        ]
+        if not new_temperatures:
+            return
+        async_add_entities(
+            RedfishTemperatureSensor(coordinator, key) for key in new_temperatures
+        )
+        known_temperatures.update(new_temperatures)
+
+    async_add_new_sensors()
+    entry.async_on_unload(coordinator.async_add_listener(async_add_new_sensors))
 
 
 class RedfishTemperatureSensor(

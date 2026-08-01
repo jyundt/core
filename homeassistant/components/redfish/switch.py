@@ -3,7 +3,7 @@
 from typing import Any, override
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import RedfishConfigEntry, RedfishDataUpdateCoordinator
@@ -18,10 +18,26 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up Redfish switches."""
-    async_add_entities(
-        RedfishSystemSwitch(entry.runtime_data, system_id)
-        for system_id in entry.runtime_data.data.systems
-    )
+    coordinator = entry.runtime_data
+    known_systems: set[str] = set()
+
+    @callback
+    def async_add_new_switches() -> None:
+        """Add switches for newly discovered systems."""
+        new_systems = [
+            system_id
+            for system_id in coordinator.data.systems
+            if system_id not in known_systems
+        ]
+        if not new_systems:
+            return
+        async_add_entities(
+            RedfishSystemSwitch(coordinator, system_id) for system_id in new_systems
+        )
+        known_systems.update(new_systems)
+
+    async_add_new_switches()
+    entry.async_on_unload(coordinator.async_add_listener(async_add_new_switches))
 
 
 class RedfishSystemSwitch(RedfishSystemEntity, SwitchEntity):

@@ -1,6 +1,6 @@
 """Tests for Redfish temperature sensors."""
 
-from homeassistant.components.redfish.models import RedfishData
+from homeassistant.components.redfish.models import RedfishData, RedfishTemperature
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
@@ -58,3 +58,35 @@ async def test_temperature_is_unavailable_when_missing_from_update(
 
     assert (state := hass.states.get(entity_id))
     assert state.state == "unavailable"
+
+
+async def test_temperature_sensor_is_added_when_reading_becomes_usable(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Test a newly usable temperature reading creates a sensor."""
+    coordinator = init_integration.runtime_data
+    coordinator.async_set_updated_data(
+        RedfishData(
+            systems=coordinator.data.systems,
+            chassis=coordinator.data.chassis,
+            temperatures={
+                **coordinator.data.temperatures,
+                ("1", "CPU2"): RedfishTemperature(
+                    chassis_id="1",
+                    member_id="CPU2",
+                    name="CPU 2",
+                    reading_celsius=43.5,
+                ),
+            },
+        )
+    )
+    await hass.async_block_till_done()
+
+    entity_id = entity_registry.async_get_entity_id(
+        SENSOR_DOMAIN, "redfish", "redfish-entry_1_CPU2"
+    )
+    assert entity_id is not None
+    assert (state := hass.states.get(entity_id))
+    assert state.state == "43.5"
