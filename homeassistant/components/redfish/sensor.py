@@ -1,8 +1,12 @@
 """Sensors for Redfish temperatures."""
 
-from typing import Any, override
+from typing import override
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -12,6 +16,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import RedfishConfigEntry, RedfishDataUpdateCoordinator
 
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -20,8 +26,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up Redfish temperature sensors."""
     async_add_entities(
-        RedfishTemperatureSensor(entry.runtime_data, temperature)
-        for temperature in entry.runtime_data.data.temperatures
+        RedfishTemperatureSensor(entry.runtime_data, temperature_key)
+        for temperature_key in entry.runtime_data.data.temperatures
     )
 
 
@@ -31,32 +37,48 @@ class RedfishTemperatureSensor(
     """A Redfish chassis temperature sensor."""
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_has_entity_name = True
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
-        self, coordinator: RedfishDataUpdateCoordinator, temperature: dict[str, Any]
+        self,
+        coordinator: RedfishDataUpdateCoordinator,
+        temperature_key: tuple[str, str],
     ) -> None:
-        """Initialize sensor."""
+        """Initialize the sensor."""
         super().__init__(coordinator)
-        self._chassis_id = temperature["chassis_id"]
-        self._member_id = temperature["MemberId"]
+        self._temperature_key = temperature_key
+        chassis_id, member_id = temperature_key
+        temperature = coordinator.data.temperatures[temperature_key]
+        chassis = coordinator.data.chassis[chassis_id]
         self._attr_unique_id = (
-            f"{coordinator.config_entry.entry_id}_{self._chassis_id}_{self._member_id}"
+            f"{coordinator.config_entry.entry_id}_{chassis_id}_{member_id}"
         )
-        self._attr_name = temperature["Name"]
+        self._attr_name = temperature.name
         self._attr_device_info = DeviceInfo(
             identifiers={
-                (DOMAIN, f"{coordinator.config_entry.entry_id}_{self._chassis_id}")
-            }
+                (DOMAIN, f"{coordinator.config_entry.entry_id}_chassis_{chassis_id}")
+            },
+            name=chassis.name or chassis.chassis_id,
+            manufacturer=chassis.manufacturer,
+            model=chassis.model,
+            serial_number=chassis.serial_number,
         )
 
     @property
     @override
-    def native_value(self) -> float:
+    def available(self) -> bool:
+        """Return whether this reading is present in the latest update."""
+        return (
+            super().available
+            and self._temperature_key in self.coordinator.data.temperatures
+        )
+
+    @property
+    @override
+    def native_value(self) -> float | None:
         """Return temperature in Celsius."""
-        return next(
-            item
-            for item in self.coordinator.data.temperatures
-            if item["chassis_id"] == self._chassis_id
-            and item["MemberId"] == self._member_id
-        )["ReadingCelsius"]
+        if temperature := self.coordinator.data.temperatures.get(self._temperature_key):
+            return temperature.reading_celsius
+        return None

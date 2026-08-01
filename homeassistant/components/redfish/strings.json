@@ -1,9 +1,14 @@
 {
   "config": {
+    "abort": {
+      "already_configured": "This Redfish service is already configured"
+    },
     "error": {
       "cannot_connect": "Cannot connect",
       "invalid_auth": "Invalid authentication",
-      "no_systems": "No ComputerSystem resources found"
+      "invalid_url": "Invalid Redfish base URL",
+      "no_systems": "No ComputerSystem resources found",
+      "unknown": "Unexpected error"
     },
     "step": {
       "user": {
@@ -11,8 +16,42 @@
           "base_url": "Redfish base URL",
           "password": "Password",
           "username": "Username"
+        },
+        "data_description": {
+          "base_url": "Base URL including the HTTPS scheme",
+          "password": "Password for the Redfish account",
+          "username": "Username for the Redfish account"
         }
       }
+    }
+  },
+  "entity": {
+    "button": {
+      "force_off": { "name": "Force off" },
+      "force_on": { "name": "Force on" },
+      "force_restart": { "name": "Force restart" },
+      "full_power_cycle": { "name": "Full power cycle" },
+      "graceful_restart": { "name": "Graceful restart" },
+      "nmi": { "name": "NMI" },
+      "pause": { "name": "Pause" },
+      "power_cycle": { "name": "Power cycle" },
+      "push_power_button": { "name": "Push power button" },
+      "resume": { "name": "Resume" },
+      "suspend": { "name": "Suspend" }
+    },
+    "switch": {
+      "power": { "name": "Power" }
+    }
+  },
+  "exceptions": {
+    "reset_failed": {
+      "message": "Failed to perform {reset_type} on the system"
+    },
+    "reset_not_supported": {
+      "message": "Reset type {reset_type} is not supported by this system"
+    },
+    "update_failed": {
+      "message": "Error communicating with the Redfish service"
     }
   }
 }

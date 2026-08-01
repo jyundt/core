@@ -1,17 +1,25 @@
 """Data coordinator for Redfish."""
 
-from dataclasses import dataclass
+import asyncio
 import logging
 from typing import Any, override
 
 import aiohttp
+from yarl import URL
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONF_BASE_URL, DOMAIN, UPDATE_INTERVAL
+from .const import CONF_BASE_URL, DOMAIN, REQUEST_TIMEOUT, UPDATE_INTERVAL
+from .models import (
+    RedfishData,
+    RedfishSystem,
+    parse_chassis,
+    parse_system,
+    parse_temperature,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,90 +34,125 @@ class RedfishAuthError(RedfishError):
     """Authentication failed."""
 
 
-@dataclass(slots=True)
-class RedfishData:
-    """Discovered Redfish data."""
-
-    systems: list[dict[str, Any]]
-    temperatures: list[dict[str, Any]]
-
-
 class RedfishClient:
     """Minimal asynchronous Redfish client."""
 
     def __init__(
-        self, hass: HomeAssistant, base_url: str, username: str, password: str
+        self,
+        session: aiohttp.ClientSession,
+        base_url: str,
+        username: str,
+        password: str,
     ) -> None:
         """Initialize the client."""
-        self._session = async_get_clientsession(hass)
-        self._base_url = base_url.rstrip("/")
+        self._session = session
+        self._base_url = URL(base_url)
         self._headers = {"Authorization": aiohttp.encode_basic_auth(username, password)}
+
+    def _resolve_url(self, target: str) -> URL:
+        """Resolve a relative Redfish target against the configured service."""
+        target_url = URL(target)
+        if target_url.is_absolute():
+            if target_url.origin() != self._base_url.origin():
+                raise RedfishError
+            return target_url
+        return self._base_url.join(target_url)
 
     async def _async_get(self, path: str) -> dict[str, Any]:
         """Get a Redfish resource."""
         try:
-            async with self._session.get(
-                f"{self._base_url}{path}", headers=self._headers
-            ) as response:
-                self._check_response(response)
-                return await response.json()
+            async with asyncio.timeout(REQUEST_TIMEOUT):
+                async with self._session.get(
+                    self._resolve_url(path),
+                    allow_redirects=False,
+                    headers=self._headers,
+                ) as response:
+                    self._check_response(response)
+                    payload = await response.json()
         except RedfishAuthError:
             raise
-        except (aiohttp.ClientError, ValueError) as err:
+        except (TimeoutError, aiohttp.ClientError, ValueError) as err:
             raise RedfishError from err
+        if not isinstance(payload, dict):
+            raise RedfishError
+        return payload
 
     async def async_reset(self, target: str, reset_type: str) -> None:
         """Perform an advertised reset action."""
         try:
-            async with self._session.post(
-                f"{self._base_url}{target}",
-                headers=self._headers,
-                json={"ResetType": reset_type},
-            ) as response:
-                self._check_response(response)
+            async with asyncio.timeout(REQUEST_TIMEOUT):
+                async with self._session.post(
+                    self._resolve_url(target),
+                    allow_redirects=False,
+                    headers=self._headers,
+                    json={"ResetType": reset_type},
+                ) as response:
+                    self._check_response(response)
         except RedfishAuthError:
             raise
-        except aiohttp.ClientError as err:
+        except (TimeoutError, aiohttp.ClientError, ValueError) as err:
             raise RedfishError from err
+
+    async def async_get_systems(self) -> dict[str, RedfishSystem]:
+        """Discover ComputerSystem resources from the service root."""
+        root = await self._async_get("/redfish/v1/")
+        return await self._async_systems(root.get("Systems"))
 
     async def async_discover(self) -> RedfishData:
         """Discover systems and standard chassis Thermal resources."""
         root = await self._async_get("/redfish/v1/")
-        systems = await self._async_members(root.get("Systems"))
-        temperatures: list[dict[str, Any]] = []
-        for chassis in await self._async_members(root.get("Chassis")):
-            thermal = chassis.get("Thermal")
-            if not isinstance(thermal, dict) or not (
-                thermal_path := thermal.get("@odata.id")
-            ):
+        systems = await self._async_systems(root.get("Systems"))
+        chassis_resources = await self._async_members(root.get("Chassis"))
+        chassis = {}
+        temperatures = {}
+        for chassis_payload in chassis_resources:
+            parsed_chassis = parse_chassis(chassis_payload)
+            if parsed_chassis is None:
                 continue
-            thermal_data = await self._async_get(thermal_path)
-            for temperature in thermal_data.get("Temperatures", []):
+            chassis[parsed_chassis.chassis_id] = parsed_chassis
+            if parsed_chassis.thermal_target is None:
+                continue
+            thermal_data = await self._async_get(parsed_chassis.thermal_target)
+            temperature_data = thermal_data.get("Temperatures")
+            if not isinstance(temperature_data, list):
+                continue
+            for temperature in temperature_data:
                 if not isinstance(temperature, dict):
                     continue
-                member_id = temperature.get("MemberId")
-                name = temperature.get("Name")
-                reading = temperature.get("ReadingCelsius")
-                if (
-                    not isinstance(member_id, str)
-                    or not isinstance(name, str)
-                    or not isinstance(reading, (int, float))
+                if parsed_temperature := parse_temperature(
+                    parsed_chassis.chassis_id, temperature
                 ):
-                    continue
-                temperatures.append(
-                    {"chassis_id": chassis.get("Id", "unknown"), **temperature}
-                )
-        return RedfishData(systems, temperatures)
+                    temperatures[
+                        (parsed_chassis.chassis_id, parsed_temperature.member_id)
+                    ] = parsed_temperature
+        return RedfishData(systems, chassis, temperatures)
+
+    async def _async_systems(self, link: Any) -> dict[str, RedfishSystem]:
+        """Resolve and parse ComputerSystem resources."""
+        systems = {}
+        for payload in await self._async_members(link):
+            if system := parse_system(payload):
+                systems[system.system_id] = system
+        return systems
 
     async def _async_members(self, link: Any) -> list[dict[str, Any]]:
         """Resolve a Redfish collection's member resources."""
-        if not isinstance(link, dict) or not (path := link.get("@odata.id")):
+        if (
+            not isinstance(link, dict)
+            or not isinstance(path := link.get("@odata.id"), str)
+            or not path.strip()
+        ):
             return []
         collection = await self._async_get(path)
+        members = collection.get("Members")
+        if not isinstance(members, list):
+            return []
         return [
             await self._async_get(member_path)
-            for member in collection.get("Members", [])
-            if isinstance(member, dict) and (member_path := member.get("@odata.id"))
+            for member in members
+            if isinstance(member, dict)
+            and isinstance(member_path := member.get("@odata.id"), str)
+            and member_path.strip()
         ]
 
     @staticmethod
@@ -117,7 +160,8 @@ class RedfishClient:
         """Validate a Redfish response."""
         if response.status in (401, 403):
             raise RedfishAuthError
-        response.raise_for_status()
+        if not 200 <= response.status < 300:
+            raise RedfishError
 
 
 class RedfishDataUpdateCoordinator(DataUpdateCoordinator[RedfishData]):
@@ -128,7 +172,7 @@ class RedfishDataUpdateCoordinator(DataUpdateCoordinator[RedfishData]):
     def __init__(self, hass: HomeAssistant, entry: RedfishConfigEntry) -> None:
         """Initialize coordinator."""
         self.client = RedfishClient(
-            hass,
+            async_get_clientsession(hass),
             entry.data[CONF_BASE_URL],
             entry.data["username"],
             entry.data["password"],
@@ -147,4 +191,6 @@ class RedfishDataUpdateCoordinator(DataUpdateCoordinator[RedfishData]):
         try:
             return await self.client.async_discover()
         except RedfishError as err:
-            raise UpdateFailed from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN, translation_key="update_failed"
+            ) from err

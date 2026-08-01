@@ -2,13 +2,28 @@
 
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import patch
 
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 import pytest
 
-from homeassistant.components.redfish.coordinator import RedfishClient
+from homeassistant.components.redfish.const import DOMAIN
+from homeassistant.components.redfish.coordinator import (
+    RedfishAuthError,
+    RedfishClient,
+    RedfishError,
+)
+from homeassistant.components.redfish.models import (
+    RedfishChassis,
+    RedfishSystem,
+    RedfishTemperature,
+)
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.update_coordinator import UpdateFailed
+
+from tests.common import MockConfigEntry
 
 
 @pytest.fixture
@@ -19,7 +34,12 @@ def redfish_app() -> web.Application:
 
     async def response(request: web.Request) -> web.Response:
         app["requests"].append(
-            (request.path, await request.json() if request.method == "POST" else None)
+            (
+                request.method,
+                request.path,
+                await request.json() if request.method == "POST" else None,
+                request.headers.get("Authorization"),
+            )
         )
         if request.method == "POST":
             return web.Response(status=204)
@@ -29,7 +49,13 @@ def redfish_app() -> web.Application:
                 "Chassis": {"@odata.id": "/redfish/v1/Chassis"},
             },
             "/redfish/v1/Systems": {
-                "Members": [{"@odata.id": "/redfish/v1/Systems/1"}]
+                "Members": [
+                    {"@odata.id": "/redfish/v1/Systems/1"},
+                    {},
+                    {"@odata.id": 1},
+                    {"@odata.id": " "},
+                    "invalid",
+                ]
             },
             "/redfish/v1/Systems/1": {
                 "@odata.id": "/redfish/v1/Systems/1",
@@ -53,10 +79,18 @@ def redfish_app() -> web.Application:
                 },
             },
             "/redfish/v1/Chassis": {
-                "Members": [{"@odata.id": "/redfish/v1/Chassis/1"}]
+                "Members": [
+                    {"@odata.id": "/redfish/v1/Chassis/1"},
+                    {"@odata.id": "/redfish/v1/Chassis/2"},
+                    {"@odata.id": None},
+                ]
             },
             "/redfish/v1/Chassis/1": {
                 "Id": "1",
+                "Name": "Main chassis",
+                "Manufacturer": "Acme",
+                "Model": "Rack 1",
+                "SerialNumber": "chassis-serial",
                 "Thermal": {"@odata.id": "/redfish/v1/Chassis/1/Thermal"},
             },
             "/redfish/v1/Chassis/1/Thermal": {
@@ -64,8 +98,14 @@ def redfish_app() -> web.Application:
                     {"MemberId": "CPU1", "Name": "CPU 1", "ReadingCelsius": 42.5},
                     {"MemberId": "bad", "Name": "Bad"},
                     {"MemberId": "empty", "ReadingCelsius": 10},
+                    "invalid",
                 ]
             },
+            "/redfish/v1/Chassis/2": {
+                "Id": "2",
+                "Thermal": {"@odata.id": "/redfish/v1/Chassis/2/Thermal"},
+            },
+            "/redfish/v1/Chassis/2/Thermal": {"Temperatures": None},
         }
         if request.path not in resources:
             return web.Response(status=404)
@@ -90,36 +130,57 @@ async def test_discover_systems_and_temperatures(
 ) -> None:
     """Test standard service-root discovery and malformed temperature filtering."""
     server = await aiohttp_server(redfish_app)
-    client = RedfishClient(hass, str(server.make_url("")), "user", "password")
+    client = RedfishClient(
+        async_get_clientsession(hass),
+        str(server.make_url("")),
+        "user",
+        "password",
+    )
 
     data = await client.async_discover()
 
-    assert data.systems == [
-        {
-            "@odata.id": "/redfish/v1/Systems/1",
-            "Id": "1",
-            "Name": "Server",
-            "UUID": "uuid-1",
-            "Manufacturer": "Acme",
-            "Model": "Model 1",
-            "SerialNumber": "serial",
-            "PowerState": "On",
-            "Actions": {
-                "#ComputerSystem.Reset": {
-                    "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
-                    "ResetType@Redfish.AllowableValues": [
-                        "On",
-                        "GracefulShutdown",
-                        "ForceOff",
-                        "GracefulRestart",
-                    ],
-                }
-            },
-        }
-    ]
-    assert data.temperatures == [
-        {"chassis_id": "1", "MemberId": "CPU1", "Name": "CPU 1", "ReadingCelsius": 42.5}
-    ]
+    assert data.systems == {
+        "1": RedfishSystem(
+            odata_id="/redfish/v1/Systems/1",
+            system_id="1",
+            name="Server",
+            uuid="uuid-1",
+            manufacturer="Acme",
+            model="Model 1",
+            serial_number="serial",
+            power_state="On",
+            reset_target="/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            reset_types=frozenset(
+                {"On", "GracefulShutdown", "ForceOff", "GracefulRestart"}
+            ),
+        )
+    }
+    assert data.chassis == {
+        "1": RedfishChassis(
+            chassis_id="1",
+            name="Main chassis",
+            manufacturer="Acme",
+            model="Rack 1",
+            serial_number="chassis-serial",
+            thermal_target="/redfish/v1/Chassis/1/Thermal",
+        ),
+        "2": RedfishChassis(
+            chassis_id="2",
+            name=None,
+            manufacturer=None,
+            model=None,
+            serial_number=None,
+            thermal_target="/redfish/v1/Chassis/2/Thermal",
+        ),
+    }
+    assert data.temperatures == {
+        ("1", "CPU1"): RedfishTemperature(
+            chassis_id="1",
+            member_id="CPU1",
+            name="CPU 1",
+            reading_celsius=42.5,
+        )
+    }
 
 
 async def test_post_reset_uses_advertised_target_and_type(
@@ -129,15 +190,137 @@ async def test_post_reset_uses_advertised_target_and_type(
 ) -> None:
     """Test reset commands use the advertised action URL and payload."""
     server = await aiohttp_server(redfish_app)
-    client = RedfishClient(hass, str(server.make_url("")), "user", "password")
-
-    await client.async_reset(
-        "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset", "ForceOff"
+    client = RedfishClient(
+        async_get_clientsession(hass),
+        str(server.make_url("")),
+        "user",
+        "password",
     )
+
+    target = str(server.make_url("/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"))
+    await client.async_reset(target, "ForceOff")
 
     assert redfish_app["requests"] == [
         (
+            "POST",
             "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
             {"ResetType": "ForceOff"},
+            "Basic dXNlcjpwYXNzd29yZA==",
         )
     ]
+
+
+async def test_reject_cross_origin_advertised_target(
+    hass: HomeAssistant,
+    aiohttp_server: Callable[[], TestServer],
+    redfish_app: web.Application,
+) -> None:
+    """Test credentials are never sent to a cross-origin advertised target."""
+    server = await aiohttp_server(redfish_app)
+    malicious_app = web.Application()
+    malicious_requests: list[str] = []
+
+    async def capture_request(request: web.Request) -> web.Response:
+        malicious_requests.append(request.headers.get("Authorization", ""))
+        return web.Response(status=204)
+
+    malicious_app.router.add_post("/{path:.*}", capture_request)
+    malicious_server = await aiohttp_server(malicious_app)
+    client = RedfishClient(
+        async_get_clientsession(hass),
+        str(server.make_url("")),
+        "user",
+        "password",
+    )
+
+    with pytest.raises(RedfishError):
+        await client.async_reset(
+            str(malicious_server.make_url("/redfish/reset")), "ForceOff"
+        )
+
+    assert malicious_requests == []
+
+
+async def test_reject_cross_origin_redirect(
+    hass: HomeAssistant,
+    aiohttp_server: Callable[[], TestServer],
+) -> None:
+    """Test a Redfish response cannot redirect requests to another origin."""
+    malicious_app = web.Application()
+    malicious_requests: list[str] = []
+
+    async def capture_request(request: web.Request) -> web.Response:
+        malicious_requests.append(request.headers.get("Authorization", ""))
+        return web.json_response({})
+
+    malicious_app.router.add_get("/{path:.*}", capture_request)
+    malicious_server = await aiohttp_server(malicious_app)
+
+    redirect_app = web.Application()
+
+    async def redirect_request(_request: web.Request) -> web.Response:
+        raise web.HTTPFound(str(malicious_server.make_url("/redfish/v1/")))
+
+    redirect_app.router.add_get("/{path:.*}", redirect_request)
+    redirect_server = await aiohttp_server(redirect_app)
+    client = RedfishClient(
+        async_get_clientsession(hass),
+        str(redirect_server.make_url("")),
+        "user",
+        "password",
+    )
+
+    with pytest.raises(RedfishError):
+        await client.async_get_systems()
+
+    assert malicious_requests == []
+
+
+async def test_coordinator_update_error_is_translated(
+    init_integration: MockConfigEntry,
+) -> None:
+    """Test polling errors expose a translated Home Assistant message."""
+    coordinator = init_integration.runtime_data
+    with (
+        patch.object(coordinator.client, "async_discover", side_effect=RedfishError),
+        pytest.raises(UpdateFailed) as exc_info,
+    ):
+        await coordinator._async_update_data()
+
+    assert exc_info.value.translation_domain == DOMAIN
+    assert exc_info.value.translation_key == "update_failed"
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected_exception"),
+    [
+        pytest.param(401, {}, RedfishAuthError, id="unauthorized"),
+        pytest.param(403, {}, RedfishAuthError, id="forbidden"),
+        pytest.param(500, {}, RedfishError, id="server-error"),
+        pytest.param(200, [], RedfishError, id="non-object-json"),
+    ],
+)
+async def test_get_response_errors(
+    hass: HomeAssistant,
+    aiohttp_server: Callable[[], TestServer],
+    status: int,
+    payload: dict[str, Any] | list[Any],
+    expected_exception: type[RedfishError],
+) -> None:
+    """Test authentication, HTTP, and malformed response errors."""
+    app = web.Application()
+
+    async def response(_request: web.Request) -> web.Response:
+        return web.json_response(payload, status=status)
+
+    app.router.add_get("/{path:.*}", response)
+    server = await aiohttp_server(app)
+    client = RedfishClient(
+        async_get_clientsession(hass),
+        str(server.make_url("")),
+        "user",
+        "password",
+    )
+
+    with pytest.raises(expected_exception):
+        await client.async_get_systems()

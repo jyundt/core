@@ -4,11 +4,12 @@ from typing import Any, override
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .coordinator import RedfishConfigEntry
-from .entity import RedfishEntity
+from .coordinator import RedfishConfigEntry, RedfishDataUpdateCoordinator
+from .entity import RedfishSystemEntity
+
+PARALLEL_UPDATES = 1
 
 
 async def async_setup_entry(
@@ -18,42 +19,28 @@ async def async_setup_entry(
 ) -> None:
     """Set up Redfish switches."""
     async_add_entities(
-        RedfishSystemSwitch(entry.runtime_data, system)
-        for system in entry.runtime_data.data.systems
+        RedfishSystemSwitch(entry.runtime_data, system_id)
+        for system_id in entry.runtime_data.data.systems
     )
 
 
-class RedfishSystemSwitch(RedfishEntity, SwitchEntity):
+class RedfishSystemSwitch(RedfishSystemEntity, SwitchEntity):
     """A Redfish ComputerSystem power switch."""
 
-    def __init__(self, coordinator: Any, system: dict[str, Any]) -> None:
-        """Initialize switch."""
-        super().__init__(coordinator, system)
-        self._attr_unique_id = f"{self.identity}_power"
+    _attr_translation_key = "power"
 
-    @property
-    @override
-    def name(self) -> str:
-        """Return name."""
-        return self._system().get("Name", self.system["Id"])
+    def __init__(
+        self, coordinator: RedfishDataUpdateCoordinator, system_id: str
+    ) -> None:
+        """Initialize the switch."""
+        super().__init__(coordinator, system_id)
+        self._attr_unique_id = f"{self._system_identity}_power"
 
     @property
     @override
     def is_on(self) -> bool:
-        """Return true only for the Redfish On state."""
-        return self._system().get("PowerState") == "On"
-
-    async def _async_reset(self, reset_type: str) -> None:
-        system = self._system()
-        action = system.get("Actions", {}).get("#ComputerSystem.Reset", {})
-        target = action.get("target")
-        values = action.get("ResetType@Redfish.AllowableValues", [])
-        if not target or reset_type not in values:
-            raise HomeAssistantError(
-                f"Redfish reset type {reset_type} is not supported"
-            )
-        await self.coordinator.client.async_reset(target, reset_type)
-        await self.coordinator.async_request_refresh()
+        """Return true only for the exact Redfish On state."""
+        return self.system is not None and self.system.power_state == "On"
 
     @override
     async def async_turn_on(self, **kwargs: Any) -> None:
