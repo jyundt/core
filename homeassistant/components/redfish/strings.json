@@ -1,0 +1,18 @@
+{
+  "config": {
+    "error": {
+      "cannot_connect": "Cannot connect",
+      "invalid_auth": "Invalid authentication",
+      "no_systems": "No ComputerSystem resources found"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "base_url": "Redfish base URL",
+          "password": "Password",
+          "username": "Username"
+        }
+      }
+    }
+  }
+}
