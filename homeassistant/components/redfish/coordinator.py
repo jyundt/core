@@ -8,6 +8,7 @@ import aiohttp
 from yarl import URL
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -172,10 +173,10 @@ class RedfishDataUpdateCoordinator(DataUpdateCoordinator[RedfishData]):
     def __init__(self, hass: HomeAssistant, entry: RedfishConfigEntry) -> None:
         """Initialize coordinator."""
         self.client = RedfishClient(
-            async_get_clientsession(hass),
+            async_get_clientsession(hass, verify_ssl=entry.data[CONF_VERIFY_SSL]),
             entry.data[CONF_BASE_URL],
-            entry.data["username"],
-            entry.data["password"],
+            entry.data[CONF_USERNAME],
+            entry.data[CONF_PASSWORD],
         )
         super().__init__(
             hass,

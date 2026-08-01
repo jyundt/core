@@ -12,7 +12,7 @@ from homeassistant.components.redfish.models import (
     RedfishSystem,
     RedfishTemperature,
 )
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
 
 from tests.common import MockConfigEntry
@@ -30,6 +30,7 @@ def mock_config_entry() -> MockConfigEntry:
             CONF_BASE_URL: "https://bmc.example",
             CONF_USERNAME: "user",
             CONF_PASSWORD: "password",
+            CONF_VERIFY_SSL: False,
         },
     )
 

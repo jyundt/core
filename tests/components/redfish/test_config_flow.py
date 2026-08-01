@@ -8,7 +8,7 @@ from homeassistant import config_entries
 from homeassistant.components.redfish.const import CONF_BASE_URL, DOMAIN
 from homeassistant.components.redfish.coordinator import RedfishAuthError, RedfishError
 from homeassistant.components.redfish.models import RedfishSystem
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -18,6 +18,7 @@ USER_INPUT = {
     CONF_BASE_URL: "https://bmc.example/",
     CONF_USERNAME: "user",
     CONF_PASSWORD: "password",
+    CONF_VERIFY_SSL: False,
 }
 
 SYSTEM = RedfishSystem(
@@ -34,9 +35,35 @@ SYSTEM = RedfishSystem(
 )
 
 
-async def test_user_flow(hass: HomeAssistant) -> None:
+async def test_user_form_defaults_certificate_verification_off(
+    hass: HomeAssistant,
+) -> None:
+    """Test certificate verification defaults off for self-signed BMCs."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert (
+        result["data_schema"](
+            {
+                CONF_BASE_URL: "https://bmc.example",
+                CONF_USERNAME: "user",
+                CONF_PASSWORD: "password",
+            }
+        )[CONF_VERIFY_SSL]
+        is False
+    )
+
+
+@pytest.mark.parametrize("verify_ssl", [False, True])
+async def test_user_flow(hass: HomeAssistant, verify_ssl: bool) -> None:
     """Test successful setup validates systems and normalizes the URL."""
+    user_input = {**USER_INPUT, CONF_VERIFY_SSL: verify_ssl}
     with (
+        patch(
+            "homeassistant.components.redfish.config_flow.async_get_clientsession"
+        ) as get_clientsession,
         patch(
             "homeassistant.components.redfish.config_flow.RedfishClient.async_get_systems",
             return_value={"1": SYSTEM},
@@ -49,18 +76,19 @@ async def test_user_flow(hass: HomeAssistant) -> None:
         result = await hass.config_entries.flow.async_init(
             DOMAIN,
             context={"source": config_entries.SOURCE_USER},
-            data=USER_INPUT,
+            data=user_input,
         )
         await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Server"
     assert result["data"] == {
-        **USER_INPUT,
+        **user_input,
         CONF_BASE_URL: "https://bmc.example",
     }
     assert result["result"].unique_id == "https://bmc.example"
     get_systems.assert_awaited_once_with()
+    get_clientsession.assert_called_once_with(hass, verify_ssl=verify_ssl)
     setup_entry.assert_awaited_once()
 
 

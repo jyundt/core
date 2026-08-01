@@ -12,6 +12,7 @@ from homeassistant.components.redfish.const import DOMAIN
 from homeassistant.components.redfish.coordinator import (
     RedfishAuthError,
     RedfishClient,
+    RedfishDataUpdateCoordinator,
     RedfishError,
 )
 from homeassistant.components.redfish.models import (
@@ -121,6 +122,18 @@ def aiohttp_server(
 ) -> Callable[[], TestServer]:
     """Return aiohttp_server and allow opening sockets."""
     return aiohttp_server
+
+
+def test_coordinator_uses_configured_tls_verification(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test the coordinator uses the configured TLS verification setting."""
+    with patch(
+        "homeassistant.components.redfish.coordinator.async_get_clientsession"
+    ) as get_clientsession:
+        RedfishDataUpdateCoordinator(hass, mock_config_entry)
+
+    get_clientsession.assert_called_once_with(hass, verify_ssl=False)
 
 
 async def test_discover_systems_and_temperatures(

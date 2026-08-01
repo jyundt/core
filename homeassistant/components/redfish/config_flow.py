@@ -7,7 +7,7 @@ import voluptuous as vol
 from yarl import URL
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     TextSelector,
@@ -15,7 +15,7 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .const import CONF_BASE_URL, DOMAIN
+from .const import CONF_BASE_URL, DEFAULT_VERIFY_SSL, DOMAIN
 from .coordinator import RedfishAuthError, RedfishClient, RedfishError
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_PASSWORD): TextSelector(
             TextSelectorConfig(type=TextSelectorType.PASSWORD)
         ),
+        vol.Required(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): bool,
     }
 )
 
@@ -74,7 +75,9 @@ class RedfishConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
                 try:
                     client = RedfishClient(
-                        async_get_clientsession(self.hass),
+                        async_get_clientsession(
+                            self.hass, verify_ssl=user_input[CONF_VERIFY_SSL]
+                        ),
                         base_url,
                         user_input[CONF_USERNAME],
                         user_input[CONF_PASSWORD],

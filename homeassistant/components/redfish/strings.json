@@ -15,12 +15,14 @@
         "data": {
           "base_url": "Redfish base URL",
           "password": "Password",
-          "username": "Username"
+          "username": "Username",
+          "verify_ssl": "[%key:common::config_flow::data::verify_ssl%]"
         },
         "data_description": {
           "base_url": "Base URL including the HTTPS scheme",
           "password": "Password for the Redfish account",
-          "username": "Username for the Redfish account"
+          "username": "Username for the Redfish account",
+          "verify_ssl": "[%key:common::config_flow::description::verify_ssl%]"
         }
       }
     }
