@@ -28,6 +28,19 @@
     }
   },
   "entity": {
+    "button": {
+      "force_off": { "name": "Force off" },
+      "force_on": { "name": "Force on" },
+      "force_restart": { "name": "Force restart" },
+      "full_power_cycle": { "name": "Full power cycle" },
+      "graceful_restart": { "name": "Graceful restart" },
+      "nmi": { "name": "NMI" },
+      "pause": { "name": "Pause" },
+      "power_cycle": { "name": "Power cycle" },
+      "push_power_button": { "name": "Push power button" },
+      "resume": { "name": "Resume" },
+      "suspend": { "name": "Suspend" }
+    },
     "switch": {
       "power": { "name": "Power" }
     }
