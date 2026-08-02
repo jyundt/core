@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from homeassistant.components.redfish.const import CONF_BASE_URL, DOMAIN
-from homeassistant.components.redfish.models import RedfishData, RedfishSystem
+from homeassistant.components.redfish.models import (
+    RedfishChassis,
+    RedfishData,
+    RedfishSystem,
+    RedfishTemperature,
+)
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
 
@@ -68,7 +73,25 @@ def redfish_data() -> RedfishData:
                 reset_target=None,
                 reset_types=frozenset(),
             ),
-        }
+        },
+        chassis={
+            "1": RedfishChassis(
+                chassis_id="1",
+                name="Main chassis",
+                manufacturer="Acme",
+                model="Rack 1",
+                serial_number="chassis-serial",
+                thermal_target="/redfish/v1/Chassis/1/Thermal",
+            )
+        },
+        temperatures={
+            ("1", "CPU1"): RedfishTemperature(
+                chassis_id="1",
+                member_id="CPU1",
+                name="CPU 1",
+                reading_celsius=42.5,
+            )
+        },
     )
 
 

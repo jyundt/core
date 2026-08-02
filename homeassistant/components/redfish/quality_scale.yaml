@@ -63,9 +63,7 @@ rules:
   entity-category:
     status: exempt
     comment: Integration does not provide diagnostic or configuration entities.
-  entity-device-class:
-    status: exempt
-    comment: The system power switch has no applicable device class.
+  entity-device-class: done
   entity-disabled-by-default:
     status: exempt
     comment: All entities represent explicitly requested core functionality.

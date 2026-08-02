@@ -46,7 +46,9 @@ async def test_power_state_and_unique_ids(
             systems={
                 **coordinator.data.systems,
                 "1": replace(system, power_state="PoweringOn"),
-            }
+            },
+            chassis=coordinator.data.chassis,
+            temperatures=coordinator.data.temperatures,
         )
     )
     await hass.async_block_till_done()
@@ -152,7 +154,11 @@ async def test_system_is_unavailable_when_missing_from_update(
     coordinator = init_integration.runtime_data
 
     coordinator.async_set_updated_data(
-        RedfishData(systems={"2": coordinator.data.systems["2"]})
+        RedfishData(
+            systems={"2": coordinator.data.systems["2"]},
+            chassis=coordinator.data.chassis,
+            temperatures=coordinator.data.temperatures,
+        )
     )
     await hass.async_block_till_done()
 

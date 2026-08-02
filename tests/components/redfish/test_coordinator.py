@@ -15,7 +15,11 @@ from homeassistant.components.redfish.coordinator import (
     RedfishDataUpdateCoordinator,
     RedfishError,
 )
-from homeassistant.components.redfish.models import RedfishSystem
+from homeassistant.components.redfish.models import (
+    RedfishChassis,
+    RedfishSystem,
+    RedfishTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -43,6 +47,7 @@ def redfish_app() -> web.Application:
         resources: dict[str, dict[str, Any]] = {
             "/redfish/v1/": {
                 "Systems": {"@odata.id": "/redfish/v1/Systems"},
+                "Chassis": {"@odata.id": "/redfish/v1/Chassis"},
             },
             "/redfish/v1/Systems": {
                 "Members": [
@@ -74,6 +79,34 @@ def redfish_app() -> web.Application:
                     }
                 },
             },
+            "/redfish/v1/Chassis": {
+                "Members": [
+                    {"@odata.id": "/redfish/v1/Chassis/1"},
+                    {"@odata.id": "/redfish/v1/Chassis/2"},
+                    {"@odata.id": None},
+                ]
+            },
+            "/redfish/v1/Chassis/1": {
+                "Id": "1",
+                "Name": "Main chassis",
+                "Manufacturer": "Acme",
+                "Model": "Rack 1",
+                "SerialNumber": "chassis-serial",
+                "Thermal": {"@odata.id": "/redfish/v1/Chassis/1/Thermal"},
+            },
+            "/redfish/v1/Chassis/1/Thermal": {
+                "Temperatures": [
+                    {"MemberId": "CPU1", "Name": "CPU 1", "ReadingCelsius": 42.5},
+                    {"MemberId": "bad", "Name": "Bad"},
+                    {"MemberId": "empty", "ReadingCelsius": 10},
+                    "invalid",
+                ]
+            },
+            "/redfish/v1/Chassis/2": {
+                "Id": "2",
+                "Thermal": {"@odata.id": "/redfish/v1/Chassis/2/Thermal"},
+            },
+            "/redfish/v1/Chassis/2/Thermal": {"Temperatures": None},
         }
         if request.path not in resources:
             return web.Response(status=404)
@@ -103,12 +136,12 @@ def test_coordinator_uses_configured_tls_verification(
     get_clientsession.assert_called_once_with(hass, verify_ssl=False)
 
 
-async def test_discover_systems(
+async def test_discover_systems_and_temperatures(
     hass: HomeAssistant,
     aiohttp_server: Callable[[], TestServer],
     redfish_app: web.Application,
 ) -> None:
-    """Test standard service-root ComputerSystem discovery."""
+    """Test standard service-root discovery and malformed temperature filtering."""
     server = await aiohttp_server(redfish_app)
     client = RedfishClient(
         async_get_clientsession(hass),
@@ -135,6 +168,32 @@ async def test_discover_systems(
             ),
         )
     }
+    assert data.chassis == {
+        "1": RedfishChassis(
+            chassis_id="1",
+            name="Main chassis",
+            manufacturer="Acme",
+            model="Rack 1",
+            serial_number="chassis-serial",
+            thermal_target="/redfish/v1/Chassis/1/Thermal",
+        ),
+        "2": RedfishChassis(
+            chassis_id="2",
+            name=None,
+            manufacturer=None,
+            model=None,
+            serial_number=None,
+            thermal_target="/redfish/v1/Chassis/2/Thermal",
+        ),
+    }
+    assert data.temperatures == {
+        ("1", "CPU1"): RedfishTemperature(
+            chassis_id="1",
+            member_id="CPU1",
+            name="CPU 1",
+            reading_celsius=42.5,
+        )
+    }
 
 
 async def test_post_reset_uses_advertised_target_and_type(
@@ -152,13 +211,13 @@ async def test_post_reset_uses_advertised_target_and_type(
     )
 
     target = str(server.make_url("/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"))
-    await client.async_reset(target, "On")
+    await client.async_reset(target, "ForceOff")
 
     assert redfish_app["requests"] == [
         (
             "POST",
             "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
-            {"ResetType": "On"},
+            {"ResetType": "ForceOff"},
             "Basic dXNlcjpwYXNzd29yZA==",
         )
     ]
@@ -188,7 +247,9 @@ async def test_reject_cross_origin_advertised_target(
     )
 
     with pytest.raises(RedfishError):
-        await client.async_reset(str(malicious_server.make_url("/redfish/reset")), "On")
+        await client.async_reset(
+            str(malicious_server.make_url("/redfish/reset")), "ForceOff"
+        )
 
     assert malicious_requests == []
 

@@ -14,7 +14,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CONF_BASE_URL, DOMAIN, REQUEST_TIMEOUT, UPDATE_INTERVAL
-from .models import RedfishData, RedfishSystem, parse_system
+from .models import (
+    RedfishData,
+    RedfishSystem,
+    parse_chassis,
+    parse_system,
+    parse_temperature,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,10 +100,33 @@ class RedfishClient:
         return await self._async_systems(root.get("Systems"))
 
     async def async_discover(self) -> RedfishData:
-        """Discover ComputerSystem resources."""
+        """Discover systems and standard chassis Thermal resources."""
         root = await self._async_get("/redfish/v1/")
         systems = await self._async_systems(root.get("Systems"))
-        return RedfishData(systems)
+        chassis_resources = await self._async_members(root.get("Chassis"))
+        chassis = {}
+        temperatures = {}
+        for chassis_payload in chassis_resources:
+            parsed_chassis = parse_chassis(chassis_payload)
+            if parsed_chassis is None:
+                continue
+            chassis[parsed_chassis.chassis_id] = parsed_chassis
+            if parsed_chassis.thermal_target is None:
+                continue
+            thermal_data = await self._async_get(parsed_chassis.thermal_target)
+            temperature_data = thermal_data.get("Temperatures")
+            if not isinstance(temperature_data, list):
+                continue
+            for temperature in temperature_data:
+                if not isinstance(temperature, dict):
+                    continue
+                if parsed_temperature := parse_temperature(
+                    parsed_chassis.chassis_id, temperature
+                ):
+                    temperatures[
+                        (parsed_chassis.chassis_id, parsed_temperature.member_id)
+                    ] = parsed_temperature
+        return RedfishData(systems, chassis, temperatures)
 
     async def _async_systems(self, link: Any) -> dict[str, RedfishSystem]:
         """Resolve and parse ComputerSystem resources."""

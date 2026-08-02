@@ -68,7 +68,9 @@ async def test_reset_button_unavailable_when_no_longer_advertised(
                     system,
                     reset_types=system.reset_types - {"ForceOff"},
                 ),
-            }
+            },
+            chassis=coordinator.data.chassis,
+            temperatures=coordinator.data.temperatures,
         )
     )
     await hass.async_block_till_done()

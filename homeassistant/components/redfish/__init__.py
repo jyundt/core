@@ -5,7 +5,7 @@ from homeassistant.core import HomeAssistant
 
 from .coordinator import RedfishConfigEntry, RedfishDataUpdateCoordinator
 
-PLATFORMS = [Platform.BUTTON, Platform.SWITCH]
+PLATFORMS = [Platform.BUTTON, Platform.SENSOR, Platform.SWITCH]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: RedfishConfigEntry) -> bool:
