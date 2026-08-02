@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import override
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import RedfishConfigEntry, RedfishDataUpdateCoordinator
@@ -72,12 +72,30 @@ async def async_setup_entry(
 ) -> None:
     """Set up buttons for advertised non-primary reset actions."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        RedfishResetButton(coordinator, system_id, description)
-        for system_id, system in coordinator.data.systems.items()
-        for description in RESET_BUTTONS
-        if description.reset_type in system.reset_types
-    )
+    known_buttons: set[tuple[str, str]] = set()
+
+    @callback
+    def async_add_new_buttons() -> None:
+        """Add buttons for newly advertised reset actions."""
+        new_buttons = [
+            (system_id, description)
+            for system_id, system in coordinator.data.systems.items()
+            for description in RESET_BUTTONS
+            if description.reset_type in system.reset_types
+            and (system_id, description.key) not in known_buttons
+        ]
+        if not new_buttons:
+            return
+        async_add_entities(
+            RedfishResetButton(coordinator, system_id, description)
+            for system_id, description in new_buttons
+        )
+        known_buttons.update(
+            (system_id, description.key) for system_id, description in new_buttons
+        )
+
+    async_add_new_buttons()
+    entry.async_on_unload(coordinator.async_add_listener(async_add_new_buttons))
 
 
 class RedfishResetButton(RedfishSystemEntity, ButtonEntity):

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from homeassistant.components.redfish.coordinator import RedfishError
-from homeassistant.components.redfish.models import RedfishData
+from homeassistant.components.redfish.models import RedfishData, RedfishSystem
 from homeassistant.components.switch import (
     DOMAIN as SWITCH_DOMAIN,
     SERVICE_TURN_OFF,
@@ -164,3 +164,41 @@ async def test_system_is_unavailable_when_missing_from_update(
 
     assert (state := hass.states.get(entity_id))
     assert state.state == "unavailable"
+
+
+async def test_switch_is_added_for_newly_discovered_system(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Test a newly discovered system creates a power switch."""
+    coordinator = init_integration.runtime_data
+    coordinator.async_set_updated_data(
+        RedfishData(
+            systems={
+                **coordinator.data.systems,
+                "3": RedfishSystem(
+                    odata_id="/redfish/v1/Systems/3",
+                    system_id="3",
+                    name="New server",
+                    uuid="uuid-3",
+                    manufacturer="Acme",
+                    model="Model 3",
+                    serial_number="serial-3",
+                    power_state="On",
+                    reset_target=None,
+                    reset_types=frozenset(),
+                ),
+            },
+            chassis=coordinator.data.chassis,
+            temperatures=coordinator.data.temperatures,
+        )
+    )
+    await hass.async_block_till_done()
+
+    entity_id = entity_registry.async_get_entity_id(
+        SWITCH_DOMAIN, "redfish", "uuid-3_power"
+    )
+    assert entity_id is not None
+    assert (state := hass.states.get(entity_id))
+    assert state.state == "on"

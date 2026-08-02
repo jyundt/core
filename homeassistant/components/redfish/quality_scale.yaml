@@ -59,7 +59,7 @@ rules:
   docs-supported-functions: done
   docs-troubleshooting: todo
   docs-use-cases: done
-  dynamic-devices: todo
+  dynamic-devices: done
   entity-category:
     status: exempt
     comment: Integration does not provide diagnostic or configuration entities.

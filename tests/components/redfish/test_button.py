@@ -77,3 +77,29 @@ async def test_reset_button_unavailable_when_no_longer_advertised(
 
     assert (state := hass.states.get(entity_id))
     assert state.state == "unavailable"
+
+
+async def test_button_is_added_for_newly_advertised_reset_type(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Test a newly advertised reset type creates a button."""
+    coordinator = init_integration.runtime_data
+    system = coordinator.data.systems["1"]
+    coordinator.async_set_updated_data(
+        RedfishData(
+            systems={
+                **coordinator.data.systems,
+                "1": replace(system, reset_types=system.reset_types | {"Nmi"}),
+            },
+            chassis=coordinator.data.chassis,
+            temperatures=coordinator.data.temperatures,
+        )
+    )
+    await hass.async_block_till_done()
+
+    entity_id = entity_registry.async_get_entity_id(
+        BUTTON_DOMAIN, "redfish", "uuid-1_nmi"
+    )
+    assert entity_id is not None
